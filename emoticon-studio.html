@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>🎨 AI 이모티콘 스튜디오</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Noto+Sans+KR:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { min-height: 100vh; background: #0d0a1a; }
+    @keyframes fadeSlideIn { from { opacity:0; transform:translateY(18px) } to { opacity:1; transform:none } }
+    @keyframes spin { to { transform:rotate(360deg) } }
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
+    @keyframes gradShift { 0%,100%{background-position:0% 50%} 50%{background-position:100% 50%} }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    textarea:focus { outline: none; }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-thumb { background: rgba(167,139,250,.3); border-radius: 3px; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useCallback } = React;
+
+    const STYLES = [
+      { id:"cute",    label:"🩷 귀여운", desc:"kawaii cute style with round shapes and big eyes" },
+      { id:"funny",   label:"😂 웃긴",   desc:"exaggerated funny comic style with bold outlines" },
+      { id:"cool",    label:"😎 쿨한",   desc:"sleek modern minimal flat design style" },
+      { id:"retro",   label:"🕹️ 레트로", desc:"pixel art retro 8-bit game style" },
+      { id:"luxury",  label:"✨ 럭셔리", desc:"elegant luxury style with gold accents" },
+      { id:"chibi",   label:"🎮 치비",   desc:"chibi anime style with tiny body and huge expressive head" },
+    ];
+
+    const STATIC_SYSTEM = `You are an expert SVG emoticon/sticker designer. Create a single expressive SVG emoticon.
+STRICT RULES:
+- Output ONLY a raw SVG element — start with <svg, end with </svg>
+- Use: width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
+- Use vivid bold colors; add a soft background circle behind the character
+- Make it look like a real messaging app sticker
+- NO text, NO labels, NO titles inside SVG
+- NO markdown fences, NO explanation — raw SVG only`;
+
+    const ANIMATED_SYSTEM = `You are an expert animated SVG emoticon designer. Create an expressive animated SVG sticker.
+STRICT RULES:
+- Output ONLY a raw SVG element — start with <svg, end with </svg>
+- Use: width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
+- MUST include a <style> block inside the SVG with @keyframes CSS animations
+- Add 2-4 distinct looping animations (animation-iteration-count: infinite)
+- bouncing body, blinking eyes, wagging tail, waving arm, pulsing glow, floating, wiggle, nodding, spinning
+- Background circle should softly pulse or glow
+- NO text, NO labels, NO titles
+- NO markdown fences, NO explanation — raw SVG only`;
+
+    async function callClaude(prompt, styleDesc, animated) {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 2500,
+          system: animated ? ANIMATED_SYSTEM : STATIC_SYSTEM,
+          messages: [{
+            role: "user",
+            content: animated
+              ? `Create an ANIMATED ${styleDesc} emoticon sticker of: ${prompt}. Use looping CSS @keyframes inside a <style> tag.`
+              : `Create a ${styleDesc} emoticon sticker of: ${prompt}`
+          }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.map(b => b.text||"").join("") || "";
+      const match = text.match(/<svg[\s\S]*?<\/svg>/i);
+      return match ? match[0] : null;
+    }
+
+    async function svgToPng(svgString, size=512) {
+      return new Promise((resolve, reject) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const img = new Image();
+        const fixed = svgString.includes("xmlns") ? svgString : svgString.replace("<svg",'<svg xmlns="http://www.w3.org/2000/svg"');
+        const blob = new Blob([fixed], { type:"image/svg+xml;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        img.onload = () => { ctx.clearRect(0,0,size,size); ctx.drawImage(img,0,0,size,size); URL.revokeObjectURL(url); resolve(canvas.toDataURL("image/png")); };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(); };
+        img.src = url;
+      });
+    }
+
+    function Spinner({ color="#a78bfa", size=22 }) {
+      return <div style={{ width:size, height:size, border:`2.5px solid ${color}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin .75s linear infinite", flexShrink:0 }}/>;
+    }
+
+    function EmoticonCard({ svg, style, index, prompt, animated }) {
+      const [pngLoading, setPngLoading] = useState(false);
+      const [copied, setCopied] = useState(false);
+      const isError = svg === "ERROR";
+      const isLoading = !svg;
+      const accent = animated ? "#f59e0b" : "#a78bfa";
+      const btnGrad = animated ? "linear-gradient(135deg,#f59e0b,#ef4444)" : "linear-gradient(135deg,#7c3aed,#a78bfa)";
+      const filename = `${prompt}_${style.id}${animated?"_animated":""}`;
+
+      const downloadSVG = () => {
+        const blob = new Blob([svg], { type:"image/svg+xml" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href=url; a.download=filename+".svg"; a.click(); URL.revokeObjectURL(url);
+      };
+      const downloadPNG = async () => {
+        if (pngLoading) return; setPngLoading(true);
+        try { const d = await svgToPng(svg,512); const a=document.createElement("a"); a.href=d; a.download=filename+".png"; a.click(); }
+        catch { alert("PNG 변환 실패. SVG로 저장해주세요."); }
+        finally { setPngLoading(false); }
+      };
+      const copySVG = () => { navigator.clipboard.writeText(svg); setCopied(true); setTimeout(()=>setCopied(false),2000); };
+
+      return (
+        <div
+          style={{ background:animated?"linear-gradient(145deg,rgba(245,158,11,.09),rgba(239,68,68,.05))":"rgba(255,255,255,.06)", border:`1.5px solid ${animated?"rgba(245,158,11,.3)":"rgba(255,255,255,.12)"}`, borderRadius:22, padding:"22px 16px 18px", display:"flex", flexDirection:"column", alignItems:"center", gap:12, transition:"transform .22s,box-shadow .22s", backdropFilter:"blur(10px)", animation:"fadeSlideIn .5s ease both", animationDelay:`${index*0.07}s`, position:"relative", cursor:"default" }}
+          onMouseEnter={e=>{ e.currentTarget.style.transform="translateY(-5px) scale(1.025)"; e.currentTarget.style.boxShadow=animated?"0 18px 44px rgba(245,158,11,.18)":"0 18px 44px rgba(124,58,237,.2)"; }}
+          onMouseLeave={e=>{ e.currentTarget.style.transform=""; e.currentTarget.style.boxShadow=""; }}
+        >
+          {animated && <div style={{ position:"absolute", top:11, right:11, background:"linear-gradient(135deg,#f59e0b,#ef4444)", borderRadius:6, fontSize:9, fontWeight:800, color:"white", padding:"3px 7px", letterSpacing:".1em" }}>▶ 애니</div>}
+          <div style={{ fontSize:11, fontWeight:700, letterSpacing:".08em", textTransform:"uppercase", color:accent, background:`rgba(${animated?"245,158,11":"167,139,250"},.15)`, padding:"4px 12px", borderRadius:99 }}>{style.label}</div>
+          <div style={{ width:158, height:158, borderRadius:16, overflow:"hidden", background:isError?"rgba(239,68,68,.08)":"rgba(255,255,255,.04)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            {isError
+              ? <div style={{textAlign:"center"}}><div style={{fontSize:28}}>😔</div><div style={{fontSize:11,color:"rgba(255,100,100,.8)",marginTop:6}}>생성 실패</div></div>
+              : isLoading
+                ? <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10}}><Spinner color={accent}/><span style={{fontSize:10,color:"rgba(255,255,255,.35)"}}>{animated?"🎬 애니 생성 중...":"✨ 생성 중..."}</span></div>
+                : <div style={{width:"100%",height:"100%"}} dangerouslySetInnerHTML={{__html:svg}}/>
+            }
+          </div>
+          {svg && !isError && (
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"}}>
+              <button onClick={downloadPNG} disabled={pngLoading} style={{ background:pngLoading?"rgba(255,255,255,.1)":btnGrad, border:"none", borderRadius:10, color:pngLoading?"rgba(255,255,255,.3)":"white", fontSize:12, fontWeight:700, padding:"7px 13px", cursor:pngLoading?"not-allowed":"pointer", display:"flex", alignItems:"center", gap:5, fontFamily:"'Noto Sans KR',sans-serif" }}
+                onMouseEnter={e=>{ if(!pngLoading) e.currentTarget.style.opacity=".82"; }} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+                {pngLoading ? <><Spinner color="white" size={14}/> PNG</> : "↓ PNG"}
+              </button>
+              <button onClick={downloadSVG} style={{ background:"rgba(255,255,255,.08)", border:"1px solid rgba(255,255,255,.15)", borderRadius:10, color:"rgba(255,255,255,.65)", fontSize:12, fontWeight:600, padding:"7px 13px", cursor:"pointer", fontFamily:"'Noto Sans KR',sans-serif" }}
+                onMouseEnter={e=>{ e.currentTarget.style.background="rgba(255,255,255,.15)"; e.currentTarget.style.color="white"; }} onMouseLeave={e=>{ e.currentTarget.style.background="rgba(255,255,255,.08)"; e.currentTarget.style.color="rgba(255,255,255,.65)"; }}>↓ SVG</button>
+              <button onClick={copySVG} style={{ background:copied?"rgba(52,211,153,.15)":"rgba(255,255,255,.06)", border:`1px solid ${copied?"#34d399":"rgba(255,255,255,.1)"}`, borderRadius:10, color:copied?"#34d399":"rgba(255,255,255,.5)", fontSize:12, fontWeight:600, padding:"7px 13px", cursor:"pointer", fontFamily:"'Noto Sans KR',sans-serif", transition:"all .2s" }}>
+                {copied ? "✓ 복사됨" : "복사"}
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const EXAMPLES = ["행복한 고양이","화난 강아지","졸린 판다","춤추는 토끼","우는 병아리","놀란 아보카도","윙크하는 도넛"];
+
+    function App() {
+      const [prompt, setPrompt] = useState("");
+      const [selectedStyles, setSelectedStyles] = useState(["cute","funny","cool"]);
+      const [animated, setAnimated] = useState(false);
+      const [results, setResults] = useState({});
+      const [loading, setLoading] = useState(false);
+      const [activeStyles, setActiveStyles] = useState([]);
+      const [lastPrompt, setLastPrompt] = useState("");
+
+      const toggleStyle = id => setSelectedStyles(p => p.includes(id)?p.filter(s=>s!==id):[...p,id]);
+
+      const generate = useCallback(async () => {
+        if (!prompt.trim()||loading||selectedStyles.length===0) return;
+        const trimmed = prompt.trim();
+        setLoading(true); setLastPrompt(trimmed); setResults({});
+        const chosen = STYLES.filter(s=>selectedStyles.includes(s.id));
+        setActiveStyles(chosen);
+        await Promise.all(chosen.map(async style => {
+          try { const svg = await callClaude(trimmed,style.desc,animated); setResults(p=>({...p,[style.id]:svg||"ERROR"})); }
+          catch { setResults(p=>({...p,[style.id]:"ERROR"})); }
+        }));
+        setLoading(false);
+      }, [prompt,selectedStyles,animated,loading]);
+
+      const btnDisabled = loading||!prompt.trim()||selectedStyles.length===0;
+
+      return (
+        <div style={{ minHeight:"100vh", background:"#0d0a1a", fontFamily:"'Noto Sans KR',sans-serif", position:"relative", overflow:"hidden" }}>
+          {/* BG blobs */}
+          <div style={{ position:"fixed", top:"-15%", left:"-8%", width:550, height:550, borderRadius:"50%", background:"radial-gradient(circle,rgba(124,58,237,.22) 0%,transparent 70%)", pointerEvents:"none" }}/>
+          <div style={{ position:"fixed", bottom:"-18%", right:"-8%", width:480, height:480, borderRadius:"50%", background:"radial-gradient(circle,rgba(236,72,153,.16) 0%,transparent 70%)", pointerEvents:"none" }}/>
+
+          <div style={{ maxWidth:900, margin:"0 auto", padding:"48px 22px 90px" }}>
+
+            {/* Header */}
+            <div style={{ textAlign:"center", marginBottom:44, animation:"fadeSlideIn .6s ease both" }}>
+              <div style={{ display:"inline-block", fontSize:12, fontWeight:700, letterSpacing:".14em", color:"#a78bfa", textTransform:"uppercase", background:"rgba(167,139,250,.12)", border:"1px solid rgba(167,139,250,.3)", padding:"6px 18px", borderRadius:99, marginBottom:16 }}>AI Emoticon Studio ✦</div>
+              <h1 style={{ fontFamily:"'Syne',sans-serif", fontSize:"clamp(32px,5.5vw,54px)", fontWeight:800, background:"linear-gradient(135deg,#fff 25%,#a78bfa 55%,#ec4899 100%)", backgroundSize:"200% 200%", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text", lineHeight:1.1, marginBottom:10, animation:"gradShift 4s ease infinite" }}>이모티콘 생성기</h1>
+              <p style={{ color:"rgba(255,255,255,.4)", fontSize:15 }}>프롬프트를 입력하면 AI가 다양한 스타일의 이모티콘을 만들어드립니다</p>
+            </div>
+
+            {/* Input Card */}
+            <div style={{ background:"rgba(255,255,255,.05)", border:"1.5px solid rgba(255,255,255,.11)", borderRadius:26, padding:28, marginBottom:20, backdropFilter:"blur(14px)", animation:"fadeSlideIn .6s ease .1s both" }}>
+              <label style={{ display:"block", fontSize:12, fontWeight:700, color:"rgba(255,255,255,.45)", marginBottom:10, letterSpacing:".07em", textTransform:"uppercase" }}>어떤 이모티콘을 만들까요?</label>
+              <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); generate(); } }} placeholder="예: 행복한 고양이, 화난 강아지, 졸린 판다..." rows={2}
+                style={{ width:"100%", background:"rgba(255,255,255,.07)", border:"1.5px solid rgba(255,255,255,.1)", borderRadius:14, color:"white", fontSize:16, padding:"13px 15px", resize:"none", fontFamily:"'Noto Sans KR',sans-serif", lineHeight:1.6, transition:"border-color .2s" }}
+                onFocus={e=>e.target.style.borderColor="rgba(167,139,250,.6)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,.1)"}/>
+
+              {/* Style buttons */}
+              <div style={{ marginTop:20 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,.45)", marginBottom:10, letterSpacing:".07em", textTransform:"uppercase" }}>스타일 선택 (복수 가능)</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                  {STYLES.map(s => {
+                    const on = selectedStyles.includes(s.id);
+                    return <button key={s.id} onClick={()=>toggleStyle(s.id)} style={{ background:on?"linear-gradient(135deg,rgba(124,58,237,.45),rgba(236,72,153,.3))":"rgba(255,255,255,.06)", border:`1.5px solid ${on?"rgba(167,139,250,.6)":"rgba(255,255,255,.1)"}`, borderRadius:10, color:on?"white":"rgba(255,255,255,.45)", fontSize:13, fontWeight:on?700:500, padding:"8px 15px", cursor:"pointer", fontFamily:"'Noto Sans KR',sans-serif", transition:"all .2s" }}>{s.label}</button>;
+                  })}
+                </div>
+              </div>
+
+              {/* Animated toggle */}
+              <div style={{ marginTop:22, display:"flex", alignItems:"center", gap:14 }}>
+                <span style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,.45)", letterSpacing:".07em", textTransform:"uppercase" }}>움직이는 이모티콘</span>
+                <button onClick={()=>setAnimated(p=>!p)} style={{ width:52, height:28, borderRadius:99, border:"none", background:animated?"linear-gradient(135deg,#f59e0b,#ef4444)":"rgba(255,255,255,.12)", position:"relative", cursor:"pointer", transition:"background .3s", flexShrink:0 }}>
+                  <div style={{ position:"absolute", top:3, left:animated?26:3, width:22, height:22, borderRadius:"50%", background:"white", transition:"left .25s", boxShadow:"0 2px 6px rgba(0,0,0,.3)" }}/>
+                </button>
+                <span style={{ fontSize:12, fontWeight:600, color:animated?"#fbbf24":"rgba(255,255,255,.25)", transition:"color .3s" }}>
+                  {animated?"🎬 애니메이션 ON":"정적 이미지"}
+                </span>
+              </div>
+
+              {/* Generate btn */}
+              <button onClick={generate} disabled={btnDisabled}
+                style={{ marginTop:22, width:"100%", padding:"16px", background:btnDisabled?"rgba(255,255,255,.07)":animated?"linear-gradient(135deg,#f59e0b,#ef4444)":"linear-gradient(135deg,#7c3aed,#a855f7 50%,#ec4899)", border:"none", borderRadius:14, color:btnDisabled?"rgba(255,255,255,.28)":"white", fontSize:16, fontWeight:700, cursor:btnDisabled?"not-allowed":"pointer", fontFamily:"'Noto Sans KR',sans-serif", letterSpacing:".03em", transition:"opacity .2s" }}
+                onMouseEnter={e=>{ if(!btnDisabled) e.currentTarget.style.opacity=".88"; }} onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
+                {loading ? `${animated?"🎬":"✨"} ${selectedStyles.length}개 생성 중...` : `${animated?"🎬 움직이는":"✨"} 이모티콘 생성 (${selectedStyles.length}개 스타일)`}
+              </button>
+            </div>
+
+            {/* Quick examples */}
+            <div style={{ animation:"fadeSlideIn .6s ease .2s both", marginBottom:36 }}>
+              <div style={{ fontSize:11, color:"rgba(255,255,255,.28)", marginBottom:9, fontWeight:700, letterSpacing:".09em", textTransform:"uppercase" }}>빠른 예시</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+                {EXAMPLES.map(ex => (
+                  <button key={ex} onClick={()=>setPrompt(ex)} style={{ background:"transparent", border:"1px solid rgba(255,255,255,.1)", borderRadius:8, color:"rgba(255,255,255,.4)", fontSize:12, padding:"5px 12px", cursor:"pointer", fontFamily:"'Noto Sans KR',sans-serif", transition:"all .2s" }}
+                    onMouseEnter={e=>{ e.currentTarget.style.borderColor="rgba(167,139,250,.5)"; e.currentTarget.style.color="rgba(167,139,250,.9)"; }}
+                    onMouseLeave={e=>{ e.currentTarget.style.borderColor="rgba(255,255,255,.1)"; e.currentTarget.style.color="rgba(255,255,255,.4)"; }}>
+                    {ex}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Results */}
+            {(loading || Object.keys(results).length > 0) && (
+              <div>
+                <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:22, animation:"fadeSlideIn .5s ease both" }}>
+                  <div style={{ flex:1, height:1, background:"rgba(255,255,255,.08)" }}/>
+                  <span style={{ fontSize:12, fontWeight:700, color:"rgba(255,255,255,.35)", letterSpacing:".1em", textTransform:"uppercase", whiteSpace:"nowrap" }}>{lastPrompt && `"${lastPrompt}" 결과`}</span>
+                  <div style={{ flex:1, height:1, background:"rgba(255,255,255,.08)" }}/>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))", gap:18 }}>
+                  {activeStyles.map((style,i) => <EmoticonCard key={style.id} svg={results[style.id]} style={style} index={i} prompt={lastPrompt} animated={animated}/>)}
+                </div>
+                {Object.keys(results).length > 0 && (
+                  <div style={{ marginTop:20, padding:"12px 16px", background:"rgba(167,139,250,.07)", border:"1px solid rgba(167,139,250,.18)", borderRadius:12, fontSize:12, color:"rgba(255,255,255,.42)", lineHeight:1.7 }}>
+                    💡 <strong style={{color:"rgba(167,139,250,.8)"}}>PNG</strong>는 512×512 고해상도로 저장됩니다. <strong style={{color:"rgba(245,158,11,.8)"}}>움직이는 이모티콘</strong>은 SVG로 저장해야 애니메이션이 유지됩니다.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!loading && Object.keys(results).length === 0 && (
+              <div style={{ textAlign:"center", padding:"56px 20px", animation:"fadeSlideIn .6s ease .3s both" }}>
+                <div style={{ fontSize:52, marginBottom:12, animation:"float 3s ease-in-out infinite" }}>🎨</div>
+                <p style={{ color:"rgba(255,255,255,.2)", fontSize:14 }}>프롬프트를 입력하고 생성 버튼을 눌러보세요!</p>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
